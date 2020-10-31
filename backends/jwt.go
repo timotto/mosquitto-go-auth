@@ -17,6 +17,7 @@ import (
 	"github.com/dgrijalva/jwt-go"
 	"github.com/iegomez/mosquitto-go-auth/hashing"
 	"github.com/pkg/errors"
+	"github.com/robertkrimen/otto"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -49,6 +50,11 @@ type JWT struct {
 	Client *h.Client
 
 	hasher hashing.HashComparer
+
+	userScript        string
+	superuserScript   string
+	aclScript         string
+	scriptMaxDuration int
 }
 
 // Claims defines the struct containing the token claims. StandardClaim's Subject field should contain the username, unless an opt is set to support Username field.
@@ -62,6 +68,21 @@ type Response struct {
 	Ok    bool   `json:"ok"`
 	Error string `json:"error"`
 }
+
+type jsParams struct {
+	username *string
+	topic    *string
+	clientid *string
+	acc      *int32
+}
+
+type jsCheckType int
+
+const (
+	checkUser jsCheckType = iota
+	checkSuperuser
+	checkACL
+)
 
 func NewJWT(authOpts map[string]string, logLevel log.Level, hasher hashing.HashComparer) (JWT, error) {
 
@@ -507,6 +528,69 @@ func (o JWT) getClaims(tokenStr string, skipExpiration bool) (*Claims, error) {
 	}
 
 	return claims, nil
+}
+
+func (o JWT) runScript(checkType jsCheckType, params jsParams) (bool, error) {
+	vm := otto.New()
+
+	vm.Interrupt = make(chan func(), 1)
+	vm.SetStackDepthLimit(32)
+
+	if params.username == nil {
+		return false, errors.New("username must be set")
+	}
+
+	vm.Set("username", params.username)
+
+	var script string
+
+	switch checkType {
+	case checkUser:
+		script = o.userScript
+		log.Debugln("checking user against JS script")
+	case checkSuperuser:
+		script = o.superuserScript
+		log.Debugln("checking superuser against JS script")
+	case checkACL:
+		if params.topic == nil {
+			return false, errors.New("topic must be set")
+		}
+
+		if params.clientid == nil {
+			return false, errors.New("clientid must be set")
+		}
+
+		if params.acc == nil {
+			return false, errors.New("acc must be set")
+		}
+
+		vm.Set("topic", params.topic)
+		vm.Set("clientid", params.clientid)
+		vm.Set("acc", params.acc)
+
+		log.Debugln("checking acl against JS script")
+	default:
+		return false, errors.New("unknown check type")
+	}
+
+	go func() {
+		time.Sleep(time.Duration(o.scriptMaxDuration) * time.Millisecond)
+		vm.Interrupt <- func() {
+			panic(errors.New("execution timeout"))
+		}
+	}()
+
+	val, err := vm.Run(script)
+	if err != nil {
+		return false, err
+	}
+
+	granted, err := val.ToBoolean()
+	if err != nil {
+		return false, err
+	}
+
+	return granted, nil
 }
 
 //Halt closes any db connection.
