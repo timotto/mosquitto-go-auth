@@ -59,7 +59,7 @@ func TestJWTClaims(t *testing.T) {
 	Convey("Correct token should give no errors", t, func() {
 		// Initialize JWT in local mode.
 		authOpts := make(map[string]string)
-		authOpts["jwt_remote"] = "false"
+		authOpts["jwt_mode"] = "local"
 		authOpts["jwt_db"] = "postgres"
 		authOpts["jwt_secret"] = jwtSecret
 		authOpts["jwt_userquery"] = "select count(*) from test_user where username = $1 limit 1"
@@ -133,7 +133,7 @@ func TestLocalPostgresJWT(t *testing.T) {
 
 		// Initialize JWT in local mode.
 		authOpts := make(map[string]string)
-		authOpts["jwt_remote"] = "false"
+		authOpts["jwt_mode"] = "local"
 		authOpts["jwt_db"] = "postgres"
 		authOpts["jwt_secret"] = jwtSecret
 		authOpts["jwt_userquery"] = "select count(*) from test_user where username = $1 limit 1"
@@ -280,7 +280,7 @@ func TestLocalMysqlJWT(t *testing.T) {
 
 		//Initialize JWT in local mode.
 		authOpts := make(map[string]string)
-		authOpts["jwt_remote"] = "false"
+		authOpts["jwt_mode"] = "local"
 		authOpts["jwt_db"] = "mysql"
 		authOpts["jwt_secret"] = jwtSecret
 		authOpts["jwt_userquery"] = "select count(*) from test_user where username = ? limit 1"
@@ -519,7 +519,7 @@ func TestJWTAllJsonServer(t *testing.T) {
 	defer mockServer.Close()
 
 	authOpts := make(map[string]string)
-	authOpts["jwt_remote"] = "true"
+	authOpts["jwt_mode"] = "remote"
 	authOpts["jwt_params_mode"] = "json"
 	authOpts["jwt_response_mode"] = "json"
 	authOpts["jwt_host"] = strings.Replace(mockServer.URL, "http://", "", -1)
@@ -648,7 +648,7 @@ func TestJWTJsonStatusOnlyServer(t *testing.T) {
 	defer mockServer.Close()
 
 	authOpts := make(map[string]string)
-	authOpts["jwt_remote"] = "true"
+	authOpts["jwt_mode"] = "remote"
 	authOpts["jwt_params_mode"] = "json"
 	authOpts["jwt_response_mode"] = "status"
 	authOpts["jwt_host"] = strings.Replace(mockServer.URL, "http://", "", -1)
@@ -779,7 +779,7 @@ func TestJWTJsonTextResponseServer(t *testing.T) {
 	defer mockServer.Close()
 
 	authOpts := make(map[string]string)
-	authOpts["jwt_remote"] = "true"
+	authOpts["jwt_mode"] = "remote"
 	authOpts["jwt_params_mode"] = "json"
 	authOpts["jwt_response_mode"] = "text"
 	authOpts["jwt_host"] = strings.Replace(mockServer.URL, "http://", "", -1)
@@ -920,7 +920,7 @@ func TestJWTFormJsonResponseServer(t *testing.T) {
 	defer mockServer.Close()
 
 	authOpts := make(map[string]string)
-	authOpts["jwt_remote"] = "true"
+	authOpts["jwt_mode"] = "remote"
 	authOpts["jwt_params_mode"] = "form"
 	authOpts["jwt_response_mode"] = "json"
 	authOpts["jwt_host"] = strings.Replace(mockServer.URL, "http://", "", -1)
@@ -1043,7 +1043,7 @@ func TestJWTFormStatusOnlyServer(t *testing.T) {
 	defer mockServer.Close()
 
 	authOpts := make(map[string]string)
-	authOpts["jwt_remote"] = "true"
+	authOpts["jwt_mode"] = "remote"
 	authOpts["jwt_params_mode"] = "form"
 	authOpts["jwt_response_mode"] = "status"
 	authOpts["jwt_host"] = strings.Replace(mockServer.URL, "http://", "", -1)
@@ -1169,7 +1169,7 @@ func TestJWTFormTextResponseServer(t *testing.T) {
 	defer mockServer.Close()
 
 	authOpts := make(map[string]string)
-	authOpts["jwt_remote"] = "true"
+	authOpts["jwt_mode"] = "remote"
 	authOpts["jwt_params_mode"] = "form"
 	authOpts["jwt_response_mode"] = "text"
 	authOpts["jwt_host"] = strings.Replace(mockServer.URL, "http://", "", -1)

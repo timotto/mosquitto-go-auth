@@ -17,12 +17,11 @@ import (
 	"github.com/dgrijalva/jwt-go"
 	"github.com/iegomez/mosquitto-go-auth/hashing"
 	"github.com/pkg/errors"
-	"github.com/robertkrimen/otto"
 	log "github.com/sirupsen/logrus"
 )
 
 type JWT struct {
-	Remote  bool
+	mode    string
 	LocalDB string
 
 	Postgres       Postgres
@@ -51,10 +50,18 @@ type JWT struct {
 
 	hasher hashing.HashComparer
 
-	userScript        string
-	superuserScript   string
-	aclScript         string
-	scriptMaxDuration int
+	userScript      string
+	superuserScript string
+	aclScript       string
+
+	jsStackDepthLimit int
+	jsMsMaxDuration   int64
+
+	jsUserScript      string
+	jsSuperuserScript string
+	jsAclScript       string
+
+	jsRunner *JsRunner
 }
 
 // Claims defines the struct containing the token claims. StandardClaim's Subject field should contain the username, unless an opt is set to support Username field.
@@ -69,45 +76,31 @@ type Response struct {
 	Error string `json:"error"`
 }
 
-type jsParams struct {
-	username *string
-	topic    *string
-	clientid *string
-	acc      *int32
-}
-
-type jsCheckType int
-
 const (
-	checkUser jsCheckType = iota
-	checkSuperuser
-	checkACL
+	remoteMode = "remote"
+	localMode  = "local"
+	jsMode     = "js"
 )
 
-func NewJWT(authOpts map[string]string, logLevel log.Level, hasher hashing.HashComparer) (JWT, error) {
-
+func NewJWT(authOpts map[string]string, logLevel log.Level, hasher hashing.HashComparer) (*JWT, error) {
 	log.SetLevel(logLevel)
 
-	//Initialize with defaults
-	var jwt = JWT{
-		Remote:       false,
-		WithTLS:      false,
-		VerifyPeer:   false,
-		ResponseMode: "status",
-		ParamsMode:   "json",
-		LocalDB:      "postgres",
-		UserField:    "Subject",
-		hasher:       hasher,
+	var jwt = &JWT{
+		WithTLS:           false,
+		VerifyPeer:        false,
+		ResponseMode:      "status",
+		ParamsMode:        "json",
+		LocalDB:           "postgres",
+		UserField:         "Subject",
+		hasher:            hasher,
+		jsMsMaxDuration:   100,
+		jsStackDepthLimit: 32,
 	}
 
 	if userField, ok := authOpts["jwt_userfield"]; ok && userField == "Username" {
 		jwt.UserField = userField
 	} else {
 		log.Debugln("JWT user field not present or incorrect, defaulting to Subject field.")
-	}
-
-	if remote, ok := authOpts["jwt_remote"]; ok && remote == "true" {
-		jwt.Remote = true
 	}
 
 	if skipUserExpiration, ok := authOpts["jwt_skip_user_expiration"]; ok && skipUserExpiration == "true" {
@@ -118,167 +111,287 @@ func NewJWT(authOpts map[string]string, logLevel log.Level, hasher hashing.HashC
 		jwt.SkipACLExpiration = true
 	}
 
-	//If remote, set remote api fields. Else, set jwt secret.
-	if jwt.Remote {
+	var err error
+	switch authOpts["jwt_mode"] {
+	case jsMode:
+		jwt.mode = jsMode
+		err = configureJsJWT(jwt, authOpts)
+	case localMode:
+		jwt.mode = localMode
+		err = configureLocalJWT(jwt, authOpts, logLevel, hasher)
+	case remoteMode:
+		jwt.mode = remoteMode
+		err = configureRemoteJWT(jwt, authOpts)
+	default:
+		err = errors.New("unknown JWT mode")
+	}
 
-		missingOpts := ""
-		remoteOk := true
-
-		if responseMode, ok := authOpts["jwt_response_mode"]; ok {
-			if responseMode == "text" || responseMode == "json" {
-				jwt.ResponseMode = responseMode
-			}
-		}
-
-		if paramsMode, ok := authOpts["jwt_params_mode"]; ok {
-			if paramsMode == "form" {
-				jwt.ParamsMode = paramsMode
-			}
-		}
-
-		if userUri, ok := authOpts["jwt_getuser_uri"]; ok {
-			jwt.UserUri = userUri
-		} else {
-			remoteOk = false
-			missingOpts += " jwt_getuser_uri"
-		}
-
-		if superuserUri, ok := authOpts["jwt_superuser_uri"]; ok {
-			jwt.SuperuserUri = superuserUri
-		}
-
-		if aclUri, ok := authOpts["jwt_aclcheck_uri"]; ok {
-			jwt.AclUri = aclUri
-		} else {
-			remoteOk = false
-			missingOpts += " jwt_aclcheck_uri"
-		}
-
-		if hostname, ok := authOpts["jwt_host"]; ok {
-			jwt.Host = hostname
-		} else {
-			remoteOk = false
-			missingOpts += " jwt_host"
-		}
-
-		if port, ok := authOpts["jwt_port"]; ok {
-			jwt.Port = port
-		} else {
-			remoteOk = false
-			missingOpts += " jwt_port"
-		}
-
-		if withTLS, ok := authOpts["jwt_with_tls"]; ok && withTLS == "true" {
-			jwt.WithTLS = true
-		}
-
-		if verifyPeer, ok := authOpts["jwt_verify_peer"]; ok && verifyPeer == "true" {
-			jwt.VerifyPeer = true
-		}
-
-		if !remoteOk {
-			return jwt, errors.Errorf("JWT backend error: missing remote options: %s", missingOpts)
-		}
-
-		jwt.Client = &h.Client{Timeout: 5 * time.Second}
-
-		if !jwt.VerifyPeer {
-			tr := &h.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			}
-			jwt.Client.Transport = tr
-		}
-
-	} else {
-
-		missingOpts := ""
-		localOk := true
-
-		if secret, ok := authOpts["jwt_secret"]; ok {
-			jwt.Secret = secret
-		} else {
-			return jwt, errors.New("JWT backend error: missing jwt secret")
-		}
-
-		if userQuery, ok := authOpts["jwt_userquery"]; ok {
-			jwt.UserQuery = userQuery
-		} else {
-			localOk = false
-			missingOpts += " jwt_userquery"
-		}
-
-		if superuserQuery, ok := authOpts["jwt_superquery"]; ok {
-			jwt.SuperuserQuery = superuserQuery
-		}
-
-		if aclQuery, ok := authOpts["jwt_aclquery"]; ok {
-			jwt.AclQuery = aclQuery
-		}
-
-		if localDB, ok := authOpts["jwt_db"]; ok {
-			jwt.LocalDB = localDB
-		}
-
-		if !localOk {
-			return jwt, errors.Errorf("JWT backend error: missing local options: %s", missingOpts)
-		}
-
-		if jwt.LocalDB == "mysql" {
-			//Try to create a mysql backend with these custom queries
-			mysql, err := NewMysql(authOpts, logLevel, hasher)
-			if err != nil {
-				return jwt, errors.Errorf("JWT backend error: couldn't create mysql connector for local jwt: %s", err)
-			}
-			mysql.UserQuery = jwt.UserQuery
-			mysql.SuperuserQuery = jwt.SuperuserQuery
-			mysql.AclQuery = jwt.AclQuery
-
-			jwt.Mysql = mysql
-		} else {
-			//Try to create a postgres backend with these custom queries.
-			postgres, err := NewPostgres(authOpts, logLevel, hasher)
-			if err != nil {
-				return jwt, errors.Errorf("JWT backend error: couldn't create postgres connector for local jwt: %s", err)
-			}
-			postgres.UserQuery = jwt.UserQuery
-			postgres.SuperuserQuery = jwt.SuperuserQuery
-			postgres.AclQuery = jwt.AclQuery
-
-			jwt.Postgres = postgres
-		}
-
+	if err != nil {
+		return nil, err
 	}
 
 	return jwt, nil
 }
 
+func configureJsJWT(jwt *JWT, authOpts map[string]string) error {
+	if stackLimit, ok := authOpts["jwt_js_stack_depth_limit"]; ok {
+		limit, err := strconv.ParseInt(stackLimit, 10, 64)
+		if err != nil {
+			log.Errorf("invalid stack depth limit %s, defaulting to 32", stackLimit)
+		} else {
+			jwt.jsStackDepthLimit = int(limit)
+		}
+	}
+
+	if maxDuration, ok := authOpts["jwt_js_ms_max_duration"]; ok {
+		duration, err := strconv.ParseInt(maxDuration, 10, 64)
+		if err != nil {
+			log.Errorf("invalid stack depth limit %s, defaulting to 32", maxDuration)
+		} else {
+			jwt.jsMsMaxDuration = duration
+		}
+	}
+
+	if userScriptPath, ok := authOpts["jwt_js_user_script_path"]; ok {
+		script, err := loadScript(userScriptPath)
+		if err != nil {
+			return err
+		}
+
+		jwt.userScript = script
+	} else {
+		return errors.New("missing jwt_js_user_script_path")
+	}
+
+	if superuserScriptPath, ok := authOpts["jwt_superuser_script_path"]; ok {
+		script, err := loadScript(superuserScriptPath)
+		if err != nil {
+			return err
+		}
+
+		jwt.superuserScript = script
+	}
+
+	if aclScriptPath, ok := authOpts["jwt_js_acl_script_path"]; ok {
+		script, err := loadScript(aclScriptPath)
+		if err != nil {
+			return err
+		}
+
+		jwt.aclScript = script
+	}
+
+	jwt.jsRunner = NewJsRunner(jwt.jsStackDepthLimit, jwt.jsMsMaxDuration)
+
+	return nil
+}
+
+func configureLocalJWT(jwt *JWT, authOpts map[string]string, logLevel log.Level, hasher hashing.HashComparer) error {
+	missingOpts := ""
+	localOk := true
+
+	if secret, ok := authOpts["jwt_secret"]; ok {
+		jwt.Secret = secret
+	} else {
+		return errors.New("JWT backend error: missing jwt secret")
+	}
+
+	if userQuery, ok := authOpts["jwt_userquery"]; ok {
+		jwt.UserQuery = userQuery
+	} else {
+		localOk = false
+		missingOpts += " jwt_userquery"
+	}
+
+	if superuserQuery, ok := authOpts["jwt_superquery"]; ok {
+		jwt.SuperuserQuery = superuserQuery
+	}
+
+	if aclQuery, ok := authOpts["jwt_aclquery"]; ok {
+		jwt.AclQuery = aclQuery
+	}
+
+	if localDB, ok := authOpts["jwt_db"]; ok {
+		jwt.LocalDB = localDB
+	}
+
+	if !localOk {
+		return errors.Errorf("JWT backend error: missing local options: %s", missingOpts)
+	}
+
+	if jwt.LocalDB == "mysql" {
+		//Try to create a mysql backend with these custom queries
+		mysql, err := NewMysql(authOpts, logLevel, hasher)
+		if err != nil {
+			return errors.Errorf("JWT backend error: couldn't create mysql connector for local jwt: %s", err)
+		}
+		mysql.UserQuery = jwt.UserQuery
+		mysql.SuperuserQuery = jwt.SuperuserQuery
+		mysql.AclQuery = jwt.AclQuery
+
+		jwt.Mysql = mysql
+	} else {
+		//Try to create a postgres backend with these custom queries.
+		postgres, err := NewPostgres(authOpts, logLevel, hasher)
+		if err != nil {
+			return errors.Errorf("JWT backend error: couldn't create postgres connector for local jwt: %s", err)
+		}
+		postgres.UserQuery = jwt.UserQuery
+		postgres.SuperuserQuery = jwt.SuperuserQuery
+		postgres.AclQuery = jwt.AclQuery
+
+		jwt.Postgres = postgres
+	}
+
+	return nil
+}
+
+func configureRemoteJWT(jwt *JWT, authOpts map[string]string) error {
+	missingOpts := ""
+	remoteOk := true
+
+	if responseMode, ok := authOpts["jwt_response_mode"]; ok {
+		if responseMode == "text" || responseMode == "json" {
+			jwt.ResponseMode = responseMode
+		}
+	}
+
+	if paramsMode, ok := authOpts["jwt_params_mode"]; ok {
+		if paramsMode == "form" {
+			jwt.ParamsMode = paramsMode
+		}
+	}
+
+	if userUri, ok := authOpts["jwt_getuser_uri"]; ok {
+		jwt.UserUri = userUri
+	} else {
+		remoteOk = false
+		missingOpts += " jwt_getuser_uri"
+	}
+
+	if superuserUri, ok := authOpts["jwt_superuser_uri"]; ok {
+		jwt.SuperuserUri = superuserUri
+	}
+
+	if aclUri, ok := authOpts["jwt_aclcheck_uri"]; ok {
+		jwt.AclUri = aclUri
+	} else {
+		remoteOk = false
+		missingOpts += " jwt_aclcheck_uri"
+	}
+
+	if hostname, ok := authOpts["jwt_host"]; ok {
+		jwt.Host = hostname
+	} else {
+		remoteOk = false
+		missingOpts += " jwt_host"
+	}
+
+	if port, ok := authOpts["jwt_port"]; ok {
+		jwt.Port = port
+	} else {
+		remoteOk = false
+		missingOpts += " jwt_port"
+	}
+
+	if withTLS, ok := authOpts["jwt_with_tls"]; ok && withTLS == "true" {
+		jwt.WithTLS = true
+	}
+
+	if verifyPeer, ok := authOpts["jwt_verify_peer"]; ok && verifyPeer == "true" {
+		jwt.VerifyPeer = true
+	}
+
+	if !remoteOk {
+		return errors.Errorf("JWT backend error: missing remote options: %s", missingOpts)
+	}
+
+	jwt.Client = &h.Client{Timeout: 5 * time.Second}
+
+	if !jwt.VerifyPeer {
+		tr := &h.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+		jwt.Client.Transport = tr
+	}
+
+	return nil
+}
+
 //GetUser authenticates a given user.
 func (o JWT) GetUser(token, password, clientid string) bool {
+	switch o.mode {
+	case jsMode:
+		params := map[string]interface{}{
+			"username": token,
+		}
 
-	if o.Remote {
+		granted, err := o.jsRunner.runScript(o.userScript, params)
+		if err != nil {
+			log.Errorf("js error: %s", err)
+		}
+
+		return granted
+	case localMode:
+		claims, err := o.getClaims(token, o.SkipUserExpiration)
+
+		if err != nil {
+			log.Printf("jwt get user error: %s", err)
+			return false
+		}
+
+		if o.UserField == "Username" {
+			return o.getLocalUser(claims.Username)
+		}
+		return o.getLocalUser(claims.Subject)
+	case remoteMode:
 		var dataMap map[string]interface{}
 		var urlValues = url.Values{}
 		return o.jwtRequest(o.Host, o.UserUri, token, o.WithTLS, o.VerifyPeer, dataMap, o.Port, o.ParamsMode, o.ResponseMode, urlValues)
 	}
 
-	//If not remote, get the claims and check against postgres for user.
-	claims, err := o.getClaims(token, o.SkipUserExpiration)
-
-	if err != nil {
-		log.Printf("jwt get user error: %s", err)
-		return false
-	}
-	//Now check against the db.
-	if o.UserField == "Username" {
-		return o.getLocalUser(claims.Username)
-	}
-	return o.getLocalUser(claims.Subject)
-
+	return false
 }
 
 //GetSuperuser checks if the given user is a superuser.
 func (o JWT) GetSuperuser(token string) bool {
-	if o.Remote {
+	switch o.mode {
+	case jsMode:
+		params := map[string]interface{}{
+			"username": token,
+		}
+
+		granted, err := o.jsRunner.runScript(o.superuserScript, params)
+		if err != nil {
+			log.Errorf("js error: %s", err)
+		}
+
+		return granted
+	case localMode:
+		if o.SuperuserQuery == "" {
+			return false
+		}
+		claims, err := o.getClaims(token, o.SkipUserExpiration)
+
+		if err != nil {
+			log.Debugf("jwt get superuser error: %s", err)
+			return false
+		}
+		//Now check against db
+		if o.UserField == "Username" {
+			if o.LocalDB == "mysql" {
+				return o.Mysql.GetSuperuser(claims.Username)
+			} else {
+				return o.Postgres.GetSuperuser(claims.Username)
+			}
+		}
+
+		if o.LocalDB == "mysql" {
+			return o.Mysql.GetSuperuser(claims.Subject)
+		} else {
+			return o.Postgres.GetSuperuser(claims.Subject)
+		}
+	case remoteMode:
 		if o.SuperuserUri == "" {
 			return false
 		}
@@ -287,38 +400,49 @@ func (o JWT) GetSuperuser(token string) bool {
 		return o.jwtRequest(o.Host, o.SuperuserUri, token, o.WithTLS, o.VerifyPeer, dataMap, o.Port, o.ParamsMode, o.ResponseMode, urlValues)
 	}
 
-	//If not remote, get the claims and check against postgres for user.
-	//But check first that there's superuser query.
-	if o.SuperuserQuery == "" {
-		return false
-	}
-	claims, err := o.getClaims(token, o.SkipUserExpiration)
-
-	if err != nil {
-		log.Debugf("jwt get superuser error: %s", err)
-		return false
-	}
-	//Now check against db
-	if o.UserField == "Username" {
-		if o.LocalDB == "mysql" {
-			return o.Mysql.GetSuperuser(claims.Username)
-		} else {
-			return o.Postgres.GetSuperuser(claims.Username)
-		}
-	}
-
-	if o.LocalDB == "mysql" {
-		return o.Mysql.GetSuperuser(claims.Subject)
-	} else {
-		return o.Postgres.GetSuperuser(claims.Subject)
-	}
-
+	return false
 }
 
 //CheckAcl checks user authorization.
 func (o JWT) CheckAcl(token, topic, clientid string, acc int32) bool {
+	switch o.mode {
+	case jsMode:
+		params := map[string]interface{}{
+			"username": token,
+			"clientid": clientid,
+			"acc":      acc,
+		}
 
-	if o.Remote {
+		granted, err := o.jsRunner.runScript(o.aclScript, params)
+		if err != nil {
+			log.Errorf("js error: %s", err)
+		}
+
+		return granted
+	case localMode:
+		if o.AclQuery == "" {
+			return true
+		}
+		claims, err := o.getClaims(token, o.SkipACLExpiration)
+
+		if err != nil {
+			log.Debugf("jwt check acl error: %s", err)
+			return false
+		}
+		//Now check against the db.
+		if o.UserField == "Username" {
+			if o.LocalDB == "mysql" {
+				return o.Mysql.CheckAcl(claims.Username, topic, clientid, acc)
+			} else {
+				return o.Postgres.CheckAcl(claims.Username, topic, clientid, acc)
+			}
+		}
+		if o.LocalDB == "mysql" {
+			return o.Mysql.CheckAcl(claims.Subject, topic, clientid, acc)
+		} else {
+			return o.Postgres.CheckAcl(claims.Subject, topic, clientid, acc)
+		}
+	case remoteMode:
 		dataMap := map[string]interface{}{
 			"clientid": clientid,
 			"topic":    topic,
@@ -332,31 +456,7 @@ func (o JWT) CheckAcl(token, topic, clientid string, acc int32) bool {
 		return o.jwtRequest(o.Host, o.AclUri, token, o.WithTLS, o.VerifyPeer, dataMap, o.Port, o.ParamsMode, o.ResponseMode, urlValues)
 	}
 
-	//If not remote, get the claims and check against postgres for user.
-	//But check first that there's acl query.
-	if o.AclQuery == "" {
-		return true
-	}
-	claims, err := o.getClaims(token, o.SkipACLExpiration)
-
-	if err != nil {
-		log.Debugf("jwt check acl error: %s", err)
-		return false
-	}
-	//Now check against the db.
-	if o.UserField == "Username" {
-		if o.LocalDB == "mysql" {
-			return o.Mysql.CheckAcl(claims.Username, topic, clientid, acc)
-		} else {
-			return o.Postgres.CheckAcl(claims.Username, topic, clientid, acc)
-		}
-	}
-	if o.LocalDB == "mysql" {
-		return o.Mysql.CheckAcl(claims.Subject, topic, clientid, acc)
-	} else {
-		return o.Postgres.CheckAcl(claims.Subject, topic, clientid, acc)
-	}
-
+	return false
 }
 
 func (o JWT) jwtRequest(host, uri, token string, withTLS, verifyPeer bool, dataMap map[string]interface{}, port, paramsMode, responseMode string, urlValues url.Values) bool {
@@ -528,69 +628,6 @@ func (o JWT) getClaims(tokenStr string, skipExpiration bool) (*Claims, error) {
 	}
 
 	return claims, nil
-}
-
-func (o JWT) runScript(checkType jsCheckType, params jsParams) (bool, error) {
-	vm := otto.New()
-
-	vm.Interrupt = make(chan func(), 1)
-	vm.SetStackDepthLimit(32)
-
-	if params.username == nil {
-		return false, errors.New("username must be set")
-	}
-
-	vm.Set("username", params.username)
-
-	var script string
-
-	switch checkType {
-	case checkUser:
-		script = o.userScript
-		log.Debugln("checking user against JS script")
-	case checkSuperuser:
-		script = o.superuserScript
-		log.Debugln("checking superuser against JS script")
-	case checkACL:
-		if params.topic == nil {
-			return false, errors.New("topic must be set")
-		}
-
-		if params.clientid == nil {
-			return false, errors.New("clientid must be set")
-		}
-
-		if params.acc == nil {
-			return false, errors.New("acc must be set")
-		}
-
-		vm.Set("topic", params.topic)
-		vm.Set("clientid", params.clientid)
-		vm.Set("acc", params.acc)
-
-		log.Debugln("checking acl against JS script")
-	default:
-		return false, errors.New("unknown check type")
-	}
-
-	go func() {
-		time.Sleep(time.Duration(o.scriptMaxDuration) * time.Millisecond)
-		vm.Interrupt <- func() {
-			panic(errors.New("execution timeout"))
-		}
-	}()
-
-	val, err := vm.Run(script)
-	if err != nil {
-		return false, err
-	}
-
-	granted, err := val.ToBoolean()
-	if err != nil {
-		return false, err
-	}
-
-	return granted, nil
 }
 
 //Halt closes any db connection.
