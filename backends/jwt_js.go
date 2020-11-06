@@ -1,0 +1,124 @@
+package backends
+
+import (
+	"strconv"
+
+	"github.com/iegomez/mosquitto-go-auth/backends/js"
+	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
+)
+
+type jsJWTChecker struct {
+	stackDepthLimit int
+	msMaxDuration   int64
+
+	userScript      string
+	superuserScript string
+	aclScript       string
+
+	runner *js.Runner
+}
+
+func NewJsJWTChecker(authOpts map[string]string) (jwtChecker, error) {
+	checker := &jsJWTChecker{
+		stackDepthLimit: 32,
+		msMaxDuration:   100,
+	}
+
+	if stackLimit, ok := authOpts["jwt_js_stack_depth_limit"]; ok {
+		limit, err := strconv.ParseInt(stackLimit, 10, 64)
+		if err != nil {
+			log.Errorf("invalid stack depth limit %s, defaulting to 32", stackLimit)
+		} else {
+			checker.stackDepthLimit = int(limit)
+		}
+	}
+
+	if maxDuration, ok := authOpts["jwt_js_ms_max_duration"]; ok {
+		duration, err := strconv.ParseInt(maxDuration, 10, 64)
+		if err != nil {
+			log.Errorf("invalid stack depth limit %s, defaulting to 32", maxDuration)
+		} else {
+			checker.msMaxDuration = duration
+		}
+	}
+
+	if userScriptPath, ok := authOpts["jwt_js_user_script_path"]; ok {
+		script, err := js.LoadScript(userScriptPath)
+		if err != nil {
+			return nil, err
+		}
+
+		checker.userScript = script
+	} else {
+		return nil, errors.New("missing jwt_js_user_script_path")
+	}
+
+	if superuserScriptPath, ok := authOpts["jwt_superuser_script_path"]; ok {
+		script, err := js.LoadScript(superuserScriptPath)
+		if err != nil {
+			return nil, err
+		}
+
+		checker.superuserScript = script
+	}
+
+	if aclScriptPath, ok := authOpts["jwt_js_acl_script_path"]; ok {
+		script, err := js.LoadScript(aclScriptPath)
+		if err != nil {
+			return nil, err
+		}
+
+		checker.aclScript = script
+	}
+
+	checker.runner = js.NewRunner(checker.stackDepthLimit, checker.msMaxDuration)
+
+	return checker, nil
+}
+
+func (o *jsJWTChecker) GetUser(username string) bool {
+	params := map[string]interface{}{
+		"username": username,
+	}
+
+	granted, err := o.runner.RunScript(o.userScript, params)
+	if err != nil {
+		log.Errorf("js error: %s", err)
+	}
+
+	return granted
+}
+
+func (o *jsJWTChecker) GetSuperuser(username string) bool {
+	params := map[string]interface{}{
+		"username": username,
+	}
+
+	granted, err := o.runner.RunScript(o.superuserScript, params)
+	if err != nil {
+		log.Errorf("js error: %s", err)
+	}
+
+	return granted
+}
+
+func (o *jsJWTChecker) CheckAcl(token, topic, clientid string, acc int32) bool {
+	params := map[string]interface{}{
+		"username": token,
+		"topic":    topic,
+		"clientid": clientid,
+		"acc":      acc,
+	}
+
+	granted, err := o.runner.RunScript(o.aclScript, params)
+	if err != nil {
+		log.Errorf("js error: %s", err)
+	}
+
+	return granted
+}
+
+func (o *jsJWTChecker) Halt() {
+	// NO-OP
+}
