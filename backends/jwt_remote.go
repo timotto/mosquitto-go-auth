@@ -36,7 +36,7 @@ type Response struct {
 	Error string `json:"error"`
 }
 
-func NewRemoteChecker(authOpts map[string]string) (jwtChecker, error) {
+func NewRemoteJWTChecker(authOpts map[string]string) (jwtChecker, error) {
 	var checker = &remoteJWTChecker{
 		withTLS:      false,
 		verifyPeer:   false,

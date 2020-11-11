@@ -19,10 +19,15 @@ type jsJWTChecker struct {
 	runner *js.Runner
 }
 
+const (
+	defaultStackDepthLimit = 32
+	defaultMsMaxDuration   = 200
+)
+
 func NewJsJWTChecker(authOpts map[string]string) (jwtChecker, error) {
 	checker := &jsJWTChecker{
-		stackDepthLimit: 32,
-		msMaxDuration:   100,
+		stackDepthLimit: defaultStackDepthLimit,
+		msMaxDuration:   defaultMsMaxDuration,
 	}
 
 	if stackLimit, ok := authOpts["jwt_js_stack_depth_limit"]; ok {
@@ -54,13 +59,15 @@ func NewJsJWTChecker(authOpts map[string]string) (jwtChecker, error) {
 		return nil, errors.New("missing jwt_js_user_script_path")
 	}
 
-	if superuserScriptPath, ok := authOpts["jwt_superuser_script_path"]; ok {
+	if superuserScriptPath, ok := authOpts["jwt_js_superuser_script_path"]; ok {
 		script, err := js.LoadScript(superuserScriptPath)
 		if err != nil {
 			return nil, err
 		}
 
 		checker.superuserScript = script
+	} else {
+		return nil, errors.New("missing jwt_js_superuser_script_path")
 	}
 
 	if aclScriptPath, ok := authOpts["jwt_js_acl_script_path"]; ok {
@@ -70,6 +77,8 @@ func NewJsJWTChecker(authOpts map[string]string) (jwtChecker, error) {
 		}
 
 		checker.aclScript = script
+	} else {
+		return nil, errors.New("missing jwt_js_acl_script_path")
 	}
 
 	checker.runner = js.NewRunner(checker.stackDepthLimit, checker.msMaxDuration)
@@ -77,9 +86,9 @@ func NewJsJWTChecker(authOpts map[string]string) (jwtChecker, error) {
 	return checker, nil
 }
 
-func (o *jsJWTChecker) GetUser(username string) bool {
+func (o *jsJWTChecker) GetUser(token string) bool {
 	params := map[string]interface{}{
-		"username": username,
+		"token": token,
 	}
 
 	granted, err := o.runner.RunScript(o.userScript, params)
@@ -90,9 +99,9 @@ func (o *jsJWTChecker) GetUser(username string) bool {
 	return granted
 }
 
-func (o *jsJWTChecker) GetSuperuser(username string) bool {
+func (o *jsJWTChecker) GetSuperuser(token string) bool {
 	params := map[string]interface{}{
-		"username": username,
+		"token": token,
 	}
 
 	granted, err := o.runner.RunScript(o.superuserScript, params)
@@ -105,7 +114,7 @@ func (o *jsJWTChecker) GetSuperuser(username string) bool {
 
 func (o *jsJWTChecker) CheckAcl(token, topic, clientid string, acc int32) bool {
 	params := map[string]interface{}{
-		"username": token,
+		"token":    token,
 		"topic":    topic,
 		"clientid": clientid,
 		"acc":      acc,

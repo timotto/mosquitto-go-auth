@@ -1,6 +1,7 @@
 package backends
 
 import (
+	jwtGo "github.com/dgrijalva/jwt-go"
 	"github.com/iegomez/mosquitto-go-auth/hashing"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -16,6 +17,14 @@ type jwtChecker interface {
 	GetSuperuser(username string) bool
 	CheckAcl(username, topic, clientid string, acc int32) bool
 	Halt()
+}
+
+// Claims defines the struct containing the token claims.
+// StandardClaim's Subject field should contain the username, unless an opt is set to support Username field.
+type Claims struct {
+	jwtGo.StandardClaims
+	// If set, Username defines the identity of the user.
+	Username string `json:"username"`
 }
 
 const (
@@ -41,7 +50,7 @@ func NewJWT(authOpts map[string]string, logLevel log.Level, hasher hashing.HashC
 		checker, err = NewLocalJWTChecker(authOpts, logLevel, hasher)
 	case remoteMode:
 		jwt.mode = remoteMode
-		checker, err = NewRemoteChecker(authOpts)
+		checker, err = NewRemoteJWTChecker(authOpts)
 	default:
 		err = errors.New("unknown JWT mode")
 	}
@@ -78,4 +87,35 @@ func (o *JWT) GetName() string {
 //Halt closes any db connection.
 func (o *JWT) Halt() {
 	o.checker.Halt()
+}
+
+func getJWTClaims(secret string, tokenStr string, skipExpiration bool) (*Claims, error) {
+
+	jwtToken, err := jwtGo.ParseWithClaims(tokenStr, &Claims{}, func(token *jwtGo.Token) (interface{}, error) {
+		return []byte(secret), nil
+	})
+
+	expirationError := false
+	if err != nil {
+		if !skipExpiration {
+			log.Debugf("jwt parse error: %s", err)
+			return nil, err
+		}
+
+		if v, ok := err.(*jwtGo.ValidationError); ok && v.Errors == jwtGo.ValidationErrorExpired {
+			expirationError = true
+		}
+	}
+
+	if !jwtToken.Valid && !expirationError {
+		return nil, errors.New("jwt invalid token")
+	}
+
+	claims, ok := jwtToken.Claims.(*Claims)
+	if !ok {
+		log.Debugf("jwt error: expected *Claims, got %T", jwtToken.Claims)
+		return nil, errors.New("got strange claims")
+	}
+
+	return claims, nil
 }
