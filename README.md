@@ -76,7 +76,7 @@ Please open an issue with the `feature` or `enhancement` tag to request new back
 
 ### Requirements
 
-This package uses `Go modules` to manage dependencies, `dep` is no longer supported.
+This package uses `Go modules` to manage dependencies.
 As it interacts with `mosquitto`, it makes use of `cgo`. Also, it (optionally) uses Redis for cache purposes.
 
 
@@ -130,46 +130,24 @@ WantedBy=multi-user.target
 
 If you are running another distro or need more details on building mosquitto, please check the offical mosquitto docs.
 
-#### Build the plugin for mosquitto 1.4.x
-
-Now that mosquitto is installed, building the project is fairly simple given that you meet the requirements. Just run this commands to generate go-auth.h and then go-auth.so:
-
-```
-go build -buildmode=c-archive go-auth.go
-go build -buildmode=c-shared -o go-auth.so
-```
-
-or simply:
-
-```
-make
-```
-
-You can also run all tests (see Testing X for each backend's testing requirements) like this:
-
-```
-make test
-```
-
-#### Build the plugin for mosquitto 1.5.x and 1.6.x
-
-For the latest versions of mosquitto we need to export some flags before building and then run the same commands (we'll just use make):
+#### Building the plugin
 
 ##### Debian (and maybe others)
+
+Just run:
+
 ```
-export CGO_CFLAGS="-I/usr/local/include -fPIC"
-export CGO_LDFLAGS="-shared"
 make
 ```
 
 This assumes that `mosquitto.h`, `mosquitto_plugin.h` and `mosquitto_broker.h` are located at `/usr/local/include`, which is true for a manually built mosquitto version in debian based systems (and probably others too).
 
 ##### MacOS
+
+Run:
+
 ```
-export CGO_CFLAGS="-I/usr/local/include -fPIC"
-export CGO_LDFLAGS="-undefined dynamic_lookup"
-export CGO_LDFLAGS="-shared"
-make
+make osx
 ```
 
 This assumes that `mosquitto.h`, `mosquitto_plugin.h` and `mosquitto_broker.h` are located at `/usr/local/include`, which is true for a manually built or using brew (```brew install mosquitto```) to install mosquitto version in MacOS.
@@ -431,6 +409,13 @@ Individual backends have their options described in the sections below.
 
 As of now every backend has proper but really ugly tests in place: they expect services running for each backend, and are also pretty outdated and cumbersome to work with in general.
 This issue captures these concerns and a basic plan to refactor tests: https://github.com/iegomez/mosquitto-go-auth/issues/67.
+
+
+You may run all tests (see Testing X for each backend's testing requirements) like this:
+
+```
+make test
+```
 
 
 ### Files
