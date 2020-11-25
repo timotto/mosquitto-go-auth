@@ -132,25 +132,17 @@ If you are running another distro or need more details on building mosquitto, pl
 
 #### Building the plugin
 
-##### Debian (and maybe others)
-
-Just run:
+Only Linux (tested in Debian, Ubuntu and Mint versions) and MacOS are supported. This will build `go-auth.so` shared object:
 
 ```
 make
 ```
 
-This assumes that `mosquitto.h`, `mosquitto_plugin.h` and `mosquitto_broker.h` are located at `/usr/local/include`, which is true for a manually built mosquitto version in debian based systems (and probably others too).
+This assumes that `mosquitto.h`, `mosquitto_plugin.h` and `mosquitto_broker.h` are located at `/usr/local/include`, which is true for a manually built `mosquitto` version in debian based systems (and probably others too), or manually built or installed through brew (```brew install mosquitto```) `mosquitto` version in MacOS.
 
-##### MacOS
+If this doesn't work for your distribution or OS version, please check `Makefile` `CFLAGS` and `LDFLAGS` and adjust accordingly. 
+File an issue or open a PR if you wish to contribute correct flags for your system.
 
-Run:
-
-```
-make osx
-```
-
-This assumes that `mosquitto.h`, `mosquitto_plugin.h` and `mosquitto_broker.h` are located at `/usr/local/include`, which is true for a manually built or using brew (```brew install mosquitto```) to install mosquitto version in MacOS.
 
 #### Raspberry Pi
 
@@ -205,24 +197,22 @@ make install
 
 ### Configuration
 
-The plugin is configured in [Mosquitto's](https://mosquitto.org/) configuration file (typically `mosquitto.conf`),
-and it is loaded into Mosquitto auth with the ```auth_plugin``` option.
-
-
-#### General options
-
-Set path to plugin and include conf.d dir for further configuration:
+The plugin is configured in [Mosquitto's](https://mosquitto.org/) configuration file (typically `mosquitto.conf`).
+You may define all options there, or include e.g. a `conf.d` dir for plugin configuration:
 
 ```
-auth_plugin /path/to/go-auth.so
 include_dir /etc/mosquitto/conf.d
 ```
 
-Create some conf file (e.g., mosquitto-go-auth.conf) at /etc/mosquitto/conf.d/ and register the desired backends with:
+Create some conf file (e.g., `go-auth.conf`) at your preferred location, e.g. `/etc/mosquitto/conf.d/`, and register the plugin's shared object path and desired backends with:
 
 ```
+auth_plugin /etc/mosquitto/conf.d/go-auth.so
+
 auth_opt_backends files, postgres, jwt
 ```
+
+Set all other plugin options below in the same file.
 
 #### Cache
 

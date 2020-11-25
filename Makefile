@@ -1,11 +1,16 @@
-all:
-	env CGO_CFLAGS="-I/usr/local/include -fPIC" go build -buildmode=c-archive go-auth.go
-	env CGO_LDFLAGS="-shared" go build -buildmode=c-shared -o go-auth.so
-	go build pw-gen/pw.go
+CFLAGS := -I/usr/local/include -fPIC
+LDFLAGS := -shared
 
-osx:
-	env CGO_CFLAGS="-I/usr/local/include -fPIC" go build -buildmode=c-archive go-auth.go
-	env CGO_LDFLAGS="-undefined dynamic_lookup -shared" go build -buildmode=c-shared -o go-auth.so
+UNAME_S := $(shell uname -s)
+
+ifeq ($(UNAME_S),Darwin)
+	LDFLAGS += -undefined dynamic_lookup
+endif
+
+all:
+	@echo "Bulding for $(UNAME_S)"
+	env CGO_CFLAGS="$(CFLAGS)" go build -buildmode=c-archive go-auth.go
+	env CGO_LDFLAGS="$(LDFLAGS)" go build -buildmode=c-shared -o go-auth.so
 	go build pw-gen/pw.go
 
 test:
