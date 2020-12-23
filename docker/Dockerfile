@@ -30,7 +30,7 @@ RUN mkdir mosquitto-go-auth && \
     git clone https://github.com/iegomez/mosquitto-go-auth.git . && \
     export PATH=$PATH:/usr/local/go/bin && \
     export CGO_CFLAGS="-I/usr/local/include -fPIC" && \
-    export CGO_LDFLAGS="-shared" && \
+    export CGO_LDFLAGS="-shared -Wl,-unresolved-symbols=ignore-all" && \
     make
 
 #Start from a new image.
