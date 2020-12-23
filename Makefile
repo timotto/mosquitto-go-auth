@@ -5,6 +5,8 @@ UNAME_S := $(shell uname -s)
 
 ifeq ($(UNAME_S),Darwin)
 	LDFLAGS += -undefined dynamic_lookup
+else ifeq ($(UNAME_S),Linux)
+	LDFLAGS += -Wl,-unresolved-symbols=ignore-all
 endif
 
 all:
