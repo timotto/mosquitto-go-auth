@@ -28,7 +28,7 @@ RUN export PATH=$PATH:/usr/local/go/bin && go version && rm go${GO_VERSION}.linu
 COPY ./ ./
 
 #Build the plugin.
-RUN export PATH=$PATH:/usr/local/go/bin && export CGO_CFLAGS="-I/usr/local/include -fPIC" && export CGO_LDFLAGS="-shared -Wl,-unresolved-symbols=ignore-all" &&  make
+RUN export PATH=$PATH:/usr/local/go/bin && make
 
 #Start from a new image.
 FROM debian:stable-slim
